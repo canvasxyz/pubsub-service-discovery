@@ -61,7 +61,7 @@ export interface ServiceDiscoveryInit {
 }
 
 export interface ServiceDiscovery {
-	query(protocol: string, options?: { limit?: number }): SignedMessage[]
+	query(protocol: string, options?: { limit?: number }): PeerInfo[]
 }
 
 export class PubsubServiceDiscovery
@@ -182,11 +182,15 @@ export class PubsubServiceDiscovery
 		}
 	}
 
-	public query(
-		protocol: string,
-		options: { limit?: number } = {}
-	): SignedMessage[] {
-		return this.cache.query(protocol, options)
+	public query(protocol: string, options: { limit?: number } = {}): PeerInfo[] {
+		return this.cache.query(protocol, options).map((msg) => {
+			const record = Discovery.Record.decode(msg.data)
+			return {
+				id: msg.from,
+				multiaddrs: record.addrs.map(multiaddr),
+				protocols: record.protocols,
+			}
+		})
 	}
 
 	private async publish() {
