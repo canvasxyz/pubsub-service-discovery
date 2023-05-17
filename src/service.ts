@@ -194,10 +194,10 @@ export class PubsubServiceDiscovery
 	}
 
 	private async publish() {
-		this.log("publishing discovery record")
-
 		const addrs = this.components.addressManager.getAddresses()
 		const protocols = this.getProtocols()
+
+		this.log("publishing discovery record for protocols %o", protocols)
 
 		const record = Discovery.Record.encode({
 			addrs: addrs.map((addr) => addr.bytes),
@@ -321,7 +321,7 @@ export class PubsubServiceDiscovery
 	}
 
 	private handleConnect = async (connection: Connection): Promise<void> => {
-		this.log("new connection peer %p", connection.remotePeer)
+		this.log("new connection to peer %p", connection.remotePeer)
 
 		const requests = this.getRequests()
 		if (requests.size === 0) {

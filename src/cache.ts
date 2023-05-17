@@ -104,7 +104,7 @@ export class MemoryCache implements ServiceRecordCache {
 		this.log(
 			"got %d records: %o",
 			records.length,
-			records.map((record) => record.from)
+			records.map((record) => record.from.toString())
 		)
 
 		return records.slice(0, limit)
