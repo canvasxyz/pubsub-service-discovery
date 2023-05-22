@@ -9,6 +9,7 @@ import { Message, SignedMessage, SubscriptionChangeData } from "@libp2p/interfac
 import { Connection, Stream } from "@libp2p/interface-connection"
 import { PeerId } from "@libp2p/interface-peer-id"
 import { PeerInfo } from "@libp2p/interface-peer-info"
+import { Libp2pEvents, PeerUpdate } from "@libp2p/interface-libp2p"
 
 import { GossipSub } from "@chainsafe/libp2p-gossipsub"
 import { createTopology } from "@libp2p/topology"
@@ -37,6 +38,7 @@ import {
 
 export interface ServiceDiscoveryComponents {
 	peerId: PeerId
+	events: EventEmitter<Libp2pEvents>
 	peerStore: PeerStore
 	registrar: Registrar
 	addressManager: AddressManager
@@ -137,6 +139,8 @@ export class PubsubServiceDiscovery
 	}
 
 	public start() {
+		this.components.events.addEventListener("self:peer:update", this.handleSelfPeerUpdate)
+
 		this.pubsub.addEventListener("message", this.handleMessage)
 		this.pubsub.addEventListener("subscription-change", this.handleSubscriptionChange)
 
@@ -166,8 +170,11 @@ export class PubsubServiceDiscovery
 	}
 
 	public stop(): void {
+		this.components.events.removeEventListener("self:peer:update", this.handleSelfPeerUpdate)
+
 		this.pubsub.removeEventListener("message", this.handleMessage)
 		this.pubsub.removeEventListener("subscription-change", this.handleSubscriptionChange)
+
 		this.components.registrar.unhandle(this.protocol)
 
 		if (this.registrarId !== null) {
@@ -190,6 +197,11 @@ export class PubsubServiceDiscovery
 		const addrs = this.components.addressManager.getAddresses()
 		const protocols = this.getProtocols()
 
+		if (addrs.length === 0) {
+			this.log("no addresses to publish")
+			return
+		}
+
 		this.log("publishing discovery record for protocols %o", protocols)
 
 		const record = Discovery.Record.encode({
@@ -210,6 +222,38 @@ export class PubsubServiceDiscovery
 				this.log.error("failed to publish discovery record: %O", err)
 				this.lastPublishedRecipientCount = 0
 			})
+	}
+
+	private handleSelfPeerUpdate = ({ detail: { peer, previous } }: CustomEvent<PeerUpdate>) => {
+		if (previous !== undefined) {
+			const newAddress = peer.addresses.find((newAddress) => {
+				for (const oldAddress of previous.addresses) {
+					if (newAddress.multiaddr.equals(oldAddress.multiaddr)) {
+						return false
+					}
+				}
+
+				return true
+			})
+
+			const oldAddress = previous.addresses.find((oldAddress) => {
+				for (const newAddress of peer.addresses) {
+					if (oldAddress.multiaddr.equals(newAddress.multiaddr)) {
+						return false
+					}
+				}
+
+				return true
+			})
+
+			if (newAddress !== undefined || oldAddress !== undefined) {
+				this.log("self addresses changed")
+				this.publish()
+			}
+		} else if (peer.addresses.length > 0) {
+			this.log("self addresses changed")
+			this.publish()
+		}
 	}
 
 	private handleMessage = async ({ detail: msg }: CustomEvent<Message>) => {
@@ -248,13 +292,17 @@ export class PubsubServiceDiscovery
 	}
 
 	private async setPeerInfo(peerInfo: PeerInfo) {
+		console.log("setting peer info", peerInfo)
 		try {
 			await this.components.peerStore.merge(peerInfo.id, {
+				multiaddrs: peerInfo.multiaddrs,
 				addresses: peerInfo.multiaddrs.map((multiaddr) => ({ isCertified: true, multiaddr })),
 				protocols: peerInfo.protocols,
 			})
 
 			this.log("updated peer store")
+			const result = await this.components.peerStore.get(peerInfo.id)
+			console.log("GOT UPDATED RESULT", result)
 		} catch (err) {
 			this.log.error("failed to update peer store: %O", err)
 		}
