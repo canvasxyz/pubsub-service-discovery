@@ -5,7 +5,7 @@ import { AddressManager } from "@libp2p/interface-address-manager"
 import { ConnectionManager } from "@libp2p/interface-connection-manager"
 import { PeerStore } from "@libp2p/interface-peer-store"
 import { Registrar, StreamHandler, Topology } from "@libp2p/interface-registrar"
-import { Message, SignedMessage } from "@libp2p/interface-pubsub"
+import { Message, SignedMessage, SubscriptionChangeData } from "@libp2p/interface-pubsub"
 import { Connection, Stream } from "@libp2p/interface-connection"
 import { PeerId } from "@libp2p/interface-peer-id"
 import { PeerInfo } from "@libp2p/interface-peer-info"
@@ -103,6 +103,7 @@ export class PubsubServiceDiscovery
 	private readonly protocol: string
 	private readonly topology: Topology
 
+	private lastPublishedRecipientCount = 0
 	private timer: NodeJS.Timer | null = null
 	private registrarId: string | null = null
 
@@ -137,6 +138,7 @@ export class PubsubServiceDiscovery
 
 	public start() {
 		this.pubsub.addEventListener("message", this.handleMessage)
+		this.pubsub.addEventListener("subscription-change", this.handleSubscriptionChange)
 
 		this.components.registrar.handle(this.protocol, this.handleIncomingStream, {
 			maxInboundStreams: this.init.maxInboundStreams,
@@ -150,25 +152,24 @@ export class PubsubServiceDiscovery
 
 	public afterStart() {
 		this.pubsub.subscribe(this.topic)
-
-		this.timer = globalThis.setInterval(() => {
-			this.publish()
-		}, this.init.interval ?? PubsubServiceDiscovery.DISCOVERY_INTERVAL)
-
-		setTimeout(() => {
-			this.publish()
-		}, this.init.delay ?? PubsubServiceDiscovery.DISCOVERY_DELAY)
+		this.timer = setInterval(() => this.publish(), this.init.interval ?? PubsubServiceDiscovery.DISCOVERY_INTERVAL)
 	}
 
 	public beforeStop(): void {
+		this.pubsub.unsubscribe(this.topic)
+
 		if (this.timer !== null) {
 			clearInterval(this.timer)
 		}
 
-		this.cache.close()
+		this.cache.stop()
 	}
 
 	public stop(): void {
+		this.pubsub.removeEventListener("message", this.handleMessage)
+		this.pubsub.removeEventListener("subscription-change", this.handleSubscriptionChange)
+		this.components.registrar.unhandle(this.protocol)
+
 		if (this.registrarId !== null) {
 			this.components.registrar.unregister(this.registrarId)
 		}
@@ -185,7 +186,7 @@ export class PubsubServiceDiscovery
 		})
 	}
 
-	private async publish() {
+	private publish() {
 		const addrs = this.components.addressManager.getAddresses()
 		const protocols = this.getProtocols()
 
@@ -196,16 +197,19 @@ export class PubsubServiceDiscovery
 			protocols: protocols.filter(this.init.filterProtocols ?? all),
 		}).finish()
 
-		try {
-			const { recipients } = await this.pubsub.publish(this.topic, record, {
+		this.pubsub
+			.publish(this.topic, record, {
 				allowPublishToZeroPeers: true,
 				ignoreDuplicatePublishError: true,
 			})
-
-			this.log("published discovery record to %d peers", recipients.length)
-		} catch (err) {
-			this.log.error("failed to publish discovery record: %O", err)
-		}
+			.then(({ recipients }) => {
+				this.log("published discovery record to %d peers", recipients.length)
+				this.lastPublishedRecipientCount = recipients.length
+			})
+			.catch((err) => {
+				this.log.error("failed to publish discovery record: %O", err)
+				this.lastPublishedRecipientCount = 0
+			})
 	}
 
 	private handleMessage = async ({ detail: msg }: CustomEvent<Message>) => {
@@ -230,28 +234,43 @@ export class PubsubServiceDiscovery
 
 			this.cache.insert(record.protocols, msg)
 
-			try {
-				await this.components.peerStore.patch(msg.from, {
-					addresses: addrs.map((addr) => ({ isCertified: true, multiaddr: addr })),
+			const requests = this.getRequests()
+			if (record.protocols.some((protocol) => requests.has(protocol))) {
+				await this.setPeerInfo({
+					id: msg.from,
+					multiaddrs: addrs,
 					protocols: record.protocols,
 				})
 
-				this.log("updated peer store")
-			} catch (err) {
-				this.log.error("failed to update peer store: %O", err)
-			}
-
-			const peerInfo: PeerInfo = {
-				id: msg.from,
-				multiaddrs: addrs,
-				protocols: record.protocols,
-			}
-
-			this.dispatchEvent(new CustomEvent("peer", { detail: peerInfo }))
-
-			const requests = this.getRequests()
-			if (record.protocols.some((protocol) => requests.has(protocol))) {
 				this.connect(msg.from)
+			}
+		}
+	}
+
+	private async setPeerInfo(peerInfo: PeerInfo) {
+		try {
+			await this.components.peerStore.merge(peerInfo.id, {
+				addresses: peerInfo.multiaddrs.map((multiaddr) => ({ isCertified: true, multiaddr })),
+				protocols: peerInfo.protocols,
+			})
+
+			this.log("updated peer store")
+		} catch (err) {
+			this.log.error("failed to update peer store: %O", err)
+		}
+
+		// TODO: is this redundant??
+		this.dispatchEvent(new CustomEvent("peer", { detail: peerInfo }))
+	}
+
+	private handleSubscriptionChange = async ({
+		detail: { peerId, subscriptions },
+	}: CustomEvent<SubscriptionChangeData>) => {
+		const subscription = subscriptions.find(({ topic }) => topic === this.topic)
+		if (subscription !== undefined && subscription.subscribe) {
+			this.log("added peer %p to the service discovery mesh", peerId)
+			if (this.lastPublishedRecipientCount === 0) {
+				this.publish()
 			}
 		}
 	}
@@ -370,15 +389,11 @@ export class PubsubServiceDiscovery
 
 			this.cache.insert(record.protocols, msg)
 
-			const addrs = record.addrs.map(multiaddr)
-
-			// TODO: think about whether we should actually emit `peer` events or not...
-			const peerInfo: PeerInfo = {
+			await this.setPeerInfo({
 				id: msg.from,
-				multiaddrs: addrs,
+				multiaddrs: record.addrs.map(multiaddr),
 				protocols: record.protocols,
-			}
-			this.dispatchEvent(new CustomEvent("peer", { detail: peerInfo }))
+			})
 
 			this.connect(msg.from)
 		}
@@ -396,9 +411,10 @@ export class PubsubServiceDiscovery
 	}
 
 	private getRequests(): Map<string, { limit: number }> {
+		const { registrar } = this.components
+
 		const requests = new Map<string, { limit: number }>()
 
-		const { registrar } = this.components
 		for (const protocol of this.getProtocols()) {
 			for (const topology of registrar.getTopologies(protocol)) {
 				if (topology.peers.size < topology.min) {

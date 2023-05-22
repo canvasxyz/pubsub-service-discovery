@@ -7,7 +7,7 @@ import { CacheMap, minute, shuffle } from "./utils.js"
 export interface ServiceRecordCache {
 	insert(protocols: string[], msg: SignedMessage): void
 	query(protocol: string, options?: { limit?: number }): SignedMessage[]
-	close(): void
+	stop(): void
 }
 
 type CachedRecord = { time: number; record: SignedMessage }
@@ -31,17 +31,18 @@ export class MemoryCache implements ServiceRecordCache {
 	private readonly protocolPeerLimit: number
 
 	private readonly log = logger("canvas:pubsub-service-discovery:cache")
-	private readonly timer: NodeJS.Timer
 	private readonly protocolMap: CacheMap<string, CacheMap<string, CachedRecord>>
+	private timer: NodeJS.Timer | null = null
 
 	constructor(init: MemoryCacheInit = {}) {
 		this.ttl = init.ttl ?? MemoryCache.TTL
 		this.gcInterval = init.gcInterval ?? MemoryCache.GC_INTERVAL
 		this.protocolLimit = init.protocolLimit ?? MemoryCache.PROTOCOL_LIMIT
-		this.protocolPeerLimit =
-			init.protocolPeerLimit ?? MemoryCache.PROTOCOL_PEER_LIMIT
+		this.protocolPeerLimit = init.protocolPeerLimit ?? MemoryCache.PROTOCOL_PEER_LIMIT
 		this.protocolMap = new CacheMap(this.protocolLimit)
+	}
 
+	public start() {
 		this.timer = setInterval(() => {
 			this.log("staring gc sweep")
 
@@ -63,8 +64,12 @@ export class MemoryCache implements ServiceRecordCache {
 		}, this.gcInterval)
 	}
 
-	public close() {
-		clearInterval(this.timer)
+	public stop() {
+		if (this.timer !== null) {
+			clearInterval(this.timer)
+			this.timer = null
+			this.protocolMap.clear()
+		}
 	}
 
 	public insert(protocols: string[], record: SignedMessage) {
@@ -73,20 +78,14 @@ export class MemoryCache implements ServiceRecordCache {
 		for (const protocol of protocols) {
 			const peerMap = this.protocolMap.get(protocol)
 			if (peerMap === undefined) {
-				this.protocolMap.set(
-					protocol,
-					new CacheMap(this.protocolPeerLimit, [[id, { time, record }]])
-				)
+				this.protocolMap.set(protocol, new CacheMap(this.protocolPeerLimit, [[id, { time, record }]]))
 			} else {
 				peerMap.set(id, { time, record })
 			}
 		}
 	}
 
-	public query(
-		protocol: string,
-		options: { limit?: number } = {}
-	): SignedMessage[] {
+	public query(protocol: string, options: { limit?: number } = {}): SignedMessage[] {
 		const limit = options.limit ?? Infinity
 
 		this.log("querying %s (limit %d)", protocol, limit)
