@@ -301,8 +301,6 @@ export class PubsubServiceDiscovery
 			})
 
 			this.log("updated peer store")
-			const result = await this.components.peerStore.get(peerInfo.id)
-			console.log("GOT UPDATED RESULT", result)
 		} catch (err) {
 			this.log.error("failed to update peer store: %O", err)
 		}
