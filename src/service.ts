@@ -292,7 +292,6 @@ export class PubsubServiceDiscovery
 	}
 
 	private async setPeerInfo(peerInfo: PeerInfo) {
-		console.log("setting peer info", peerInfo)
 		try {
 			await this.components.peerStore.merge(peerInfo.id, {
 				multiaddrs: peerInfo.multiaddrs,
