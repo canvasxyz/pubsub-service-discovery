@@ -1,6 +1,6 @@
 {
 	"name": "@canvas-js/pubsub-service-discovery",
-	"version": "0.0.10",
+	"version": "0.1.0",
 	"author": "Canvas Technologies, Inc. (https://canvas.xyz)",
 	"type": "module",
 	"files": [
