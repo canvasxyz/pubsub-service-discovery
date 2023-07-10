@@ -14,13 +14,13 @@ import { Libp2pEvents, PeerUpdate } from "@libp2p/interface-libp2p"
 import { GossipSub } from "@chainsafe/libp2p-gossipsub"
 import { createTopology } from "@libp2p/topology"
 import { logger } from "@libp2p/logger"
-import { multiaddr } from "@multiformats/multiaddr"
+import { Multiaddr, multiaddr } from "@multiformats/multiaddr"
 
 import { pipe } from "it-pipe"
 import { pushable, Pushable } from "it-pushable"
 import * as lp from "it-length-prefixed"
 
-import Discovery from "#protocols/discovery"
+import * as Discovery from "./protocols/discovery.js"
 
 import { ServiceRecordCache, MemoryCache } from "./cache.js"
 import {
@@ -53,6 +53,7 @@ export interface ServiceDiscoveryInit {
 	delay?: number
 
 	filterProtocols?: (protocol: string) => boolean
+	filterMultiaddrs?: (multiaddr: Multiaddr) => boolean
 
 	maxInboundStreams?: number
 	maxOutboundStreams?: number
@@ -207,7 +208,7 @@ export class PubsubServiceDiscovery
 		const record = Discovery.Record.encode({
 			addrs: addrs.map((addr) => addr.bytes),
 			protocols: protocols.filter(this.init.filterProtocols ?? all),
-		}).finish()
+		})
 
 		this.pubsub
 			.publish(this.topic, record, {
@@ -286,7 +287,7 @@ export class PubsubServiceDiscovery
 					protocols: record.protocols,
 				})
 
-				this.connect(msg.from)
+				this.connect(msg.from, addrs)
 			}
 		}
 	}
@@ -320,7 +321,7 @@ export class PubsubServiceDiscovery
 		}
 	}
 
-	private async connect(peerId: PeerId) {
+	private async connect(peerId: PeerId, addrs: Multiaddr[]) {
 		const existingConnections = this.components.connectionManager.getConnections(peerId)
 
 		if (existingConnections.length > 0) {
@@ -389,7 +390,7 @@ export class PubsubServiceDiscovery
 
 		try {
 			const responseSink = pipe(stream.source, lp.decode, decodeResponses)
-			const requestSource: Pushable<Discovery.IQueryRequest> = pushable({
+			const requestSource: Pushable<Discovery.QueryRequest> = pushable({
 				objectMode: true,
 			})
 			pipe(requestSource, encodeRequests, lp.encode, stream.sink).catch((err) => {
@@ -434,13 +435,14 @@ export class PubsubServiceDiscovery
 
 			this.cache.insert(record.protocols, msg)
 
+			const addrs = record.addrs.map(multiaddr)
 			await this.setPeerInfo({
 				id: msg.from,
-				multiaddrs: record.addrs.map(multiaddr),
+				multiaddrs: addrs,
 				protocols: record.protocols,
 			})
 
-			this.connect(msg.from)
+			this.connect(msg.from, addrs)
 		}
 	}
 
