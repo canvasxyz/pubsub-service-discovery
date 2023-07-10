@@ -3,7 +3,7 @@ import { peerIdFromBytes } from "@libp2p/peer-id"
 import { Uint8ArrayList } from "uint8arraylist"
 import * as varint from "big-varint"
 
-import Discovery from "#protocols/discovery"
+import * as Discovery from "./protocols/discovery.js"
 
 export const second = 1000
 export const minute = 60 * second
@@ -36,28 +36,24 @@ export function shuffle<T>(array: T[]) {
 	}
 }
 
-export function assert(
-	condition: unknown,
-	message?: string
-): asserts condition {
+export function assert(condition: unknown, message?: string): asserts condition {
 	if (!condition) {
 		throw new Error(message ?? "assertion failed")
 	}
 }
 
-export function fromSignedMessage(msg: SignedMessage): Discovery.ISignedRecord {
+export function fromSignedMessage(msg: SignedMessage): Discovery.SignedRecord {
 	return {
 		from: msg.from.toBytes(),
 		data: msg.data,
 		seqno: varint.unsigned.encode(msg.sequenceNumber),
+		topic: msg.topic,
 		signature: msg.signature,
 		key: msg.key,
 	}
 }
 
-export function toSignedMessage(
-	record: Discovery.ISignedRecord
-): SignedMessage {
+export function toSignedMessage(record: Discovery.SignedRecord): SignedMessage {
 	assert(record.from instanceof Uint8Array, "record.from is missing")
 	assert(record.data instanceof Uint8Array, "record.data is missing")
 	assert(typeof record.topic === "string", "record.topic is missing")
@@ -76,19 +72,15 @@ export function toSignedMessage(
 	}
 }
 
-export async function* encodeRequests(
-	source: AsyncIterable<Discovery.IQueryRequest>
-): AsyncIterable<Uint8Array> {
+export async function* encodeRequests(source: AsyncIterable<Discovery.QueryRequest>): AsyncIterable<Uint8Array> {
 	for await (const req of source) {
-		yield Discovery.QueryRequest.encode(req).finish()
+		yield Discovery.QueryRequest.encode(req)
 	}
 }
 
-export async function* encodeResponses(
-	source: AsyncIterable<Discovery.IQueryResponse>
-): AsyncIterable<Uint8Array> {
+export async function* encodeResponses(source: AsyncIterable<Discovery.QueryResponse>): AsyncIterable<Uint8Array> {
 	for await (const res of source) {
-		yield Discovery.QueryResponse.encode(res).finish()
+		yield Discovery.QueryResponse.encode(res)
 	}
 }
 
