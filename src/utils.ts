@@ -1,4 +1,4 @@
-import { SignedMessage } from "@libp2p/interface-pubsub"
+import { SignedMessage } from "@libp2p/interface/pubsub"
 import { peerIdFromBytes } from "@libp2p/peer-id"
 import { Uint8ArrayList } from "uint8arraylist"
 import * as varint from "big-varint"

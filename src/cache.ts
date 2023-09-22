@@ -1,6 +1,6 @@
 import { logger } from "@libp2p/logger"
 
-import { SignedMessage } from "@libp2p/interface-pubsub"
+import { SignedMessage } from "@libp2p/interface/pubsub"
 
 import { CacheMap, minute, shuffle } from "./utils.js"
 
@@ -32,7 +32,7 @@ export class MemoryCache implements ServiceRecordCache {
 
 	private readonly log = logger("canvas:pubsub-service-discovery:cache")
 	private readonly protocolMap: CacheMap<string, CacheMap<string, CachedRecord>>
-	private timer: NodeJS.Timer | null = null
+	private timer: NodeJS.Timeout | null = null
 
 	constructor(init: MemoryCacheInit = {}) {
 		this.ttl = init.ttl ?? MemoryCache.TTL

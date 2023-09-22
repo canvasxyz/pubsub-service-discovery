@@ -1,20 +1,19 @@
-import { Startable } from "@libp2p/interfaces/startable"
-import { CustomEvent, EventEmitter } from "@libp2p/interfaces/events"
-import { PeerDiscovery, PeerDiscoveryEvents, peerDiscovery } from "@libp2p/interface-peer-discovery"
-import { AddressManager } from "@libp2p/interface-address-manager"
-import { ConnectionManager } from "@libp2p/interface-connection-manager"
-import { PeerStore } from "@libp2p/interface-peer-store"
-import { Registrar, StreamHandler, Topology } from "@libp2p/interface-registrar"
-import { Message, SignedMessage, SubscriptionChangeData } from "@libp2p/interface-pubsub"
-import { Connection, Stream } from "@libp2p/interface-connection"
-import { PeerId } from "@libp2p/interface-peer-id"
-import { PeerInfo } from "@libp2p/interface-peer-info"
-import { Libp2pEvents, PeerUpdate } from "@libp2p/interface-libp2p"
+import type { Libp2pEvents, PeerUpdate } from "@libp2p/interface"
+import type { Startable } from "@libp2p/interface/startable"
+import type { AddressManager } from "@libp2p/interface-internal/address-manager"
+import type { ConnectionManager } from "@libp2p/interface-internal/connection-manager"
+import type { PeerStore } from "@libp2p/interface/peer-store"
+import type { Registrar, StreamHandler } from "@libp2p/interface-internal/registrar"
+import type { Message, SignedMessage, SubscriptionChangeData } from "@libp2p/interface/pubsub"
+import type { Connection, Stream } from "@libp2p/interface/connection"
+import type { PeerId } from "@libp2p/interface/peer-id"
+import type { PeerInfo } from "@libp2p/interface/peer-info"
 
-import { GossipSub } from "@chainsafe/libp2p-gossipsub"
-import { createTopology } from "@libp2p/topology"
-import { logger } from "@libp2p/logger"
+import { PeerDiscovery, PeerDiscoveryEvents, peerDiscovery } from "@libp2p/interface/peer-discovery"
+import { CustomEvent, EventEmitter } from "@libp2p/interface/events"
 import { Multiaddr, multiaddr } from "@multiformats/multiaddr"
+import { GossipSub } from "@chainsafe/libp2p-gossipsub"
+import { logger } from "@libp2p/logger"
 
 import { pipe } from "it-pipe"
 import { pushable, Pushable } from "it-pushable"
@@ -35,6 +34,14 @@ import {
 	shuffle,
 	toSignedMessage,
 } from "./utils.js"
+
+interface Topology {
+	min?: number
+	max?: number
+
+	onConnect?: (peerId: PeerId, conn: Connection) => void
+	onDisconnect?: (peerId: PeerId) => void
+}
 
 export interface ServiceDiscoveryComponents {
 	peerId: PeerId
@@ -105,6 +112,7 @@ export class PubsubServiceDiscovery
 	private readonly topic: string
 	private readonly protocol: string
 	private readonly topology: Topology
+	private readonly topologyPeers = new Set<string>()
 
 	private lastPublishedRecipientCount = 0
 	private timer: NodeJS.Timer | null = null
@@ -116,15 +124,16 @@ export class PubsubServiceDiscovery
 		this.cache = init.cache ?? new MemoryCache()
 		this.topic = init.topic ?? PubsubServiceDiscovery.DISCOVERY_TOPIC
 		this.protocol = init.protocol ?? PubsubServiceDiscovery.DISCOVERY_PROTOCOL
-		this.topology = createTopology({
+
+		this.topology = {
 			onConnect: (peerId, connection) => {
-				this.topology.peers.add(peerId.toString())
+				this.topologyPeers.add(peerId.toString())
 				this.handleConnect(connection)
 			},
 			onDisconnect: (peerId) => {
-				this.topology.peers.delete(peerId.toString())
+				this.topologyPeers.delete(peerId.toString())
 			},
-		})
+		}
 	}
 
 	get [peerDiscovery](): PeerDiscovery {
@@ -164,6 +173,7 @@ export class PubsubServiceDiscovery
 		this.pubsub.unsubscribe(this.topic)
 
 		if (this.timer !== null) {
+			// @ts-expect-error fdkalf
 			clearInterval(this.timer)
 		}
 
@@ -332,7 +342,6 @@ export class PubsubServiceDiscovery
 		this.log("connecting to peer %p", peerId)
 		try {
 			await this.components.connectionManager.openConnection(peerId, {
-				// @ts-expect-error needs adding to the ConnectionManager interface
 				priority: this.init.autoDialPriority ?? PubsubServiceDiscovery.AUTO_DIAL_PRIORITY,
 			})
 
